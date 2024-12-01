@@ -3,6 +3,9 @@ description: |
 
 compatible: "zmk,kscan-composite"
 
+# to allow wakeup-source to be set on composite kscans
+include: kscan.yaml
+
 properties:
   label:
     type: string

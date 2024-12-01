@@ -93,6 +93,7 @@ struct kscan_matrix_config {
     int32_t debounce_scan_period_ms;
     int32_t poll_period_ms;
     enum kscan_diode_direction diode_direction;
+    bool toggle_mode;
 };
 
 /**
@@ -150,8 +151,15 @@ static int kscan_matrix_interrupt_configure(const struct device *dev, const gpio
 #endif
 
 #if USE_INTERRUPTS
-static int kscan_matrix_interrupt_enable(const struct device *dev) {
-    int err = kscan_matrix_interrupt_configure(dev, GPIO_INT_LEVEL_ACTIVE);
+static int kscan_matrix_interrupt_enable(const struct device *dev, bool toggle_mode) {
+    int err;
+    LOG_ERR("toggle_mode=%u", toggle_mode);
+    if (toggle_mode) {
+        err = kscan_matrix_interrupt_configure(dev, GPIO_INT_EDGE_TO_INACTIVE);
+    } else {
+        err = kscan_matrix_interrupt_configure(dev, GPIO_INT_LEVEL_ACTIVE);
+    }
+
     if (err) {
         return err;
     }
@@ -200,10 +208,10 @@ static void kscan_matrix_read_continue(const struct device *dev) {
     k_work_reschedule(&data->work, K_TIMEOUT_ABS_MS(data->scan_time));
 }
 
-static void kscan_matrix_read_end(const struct device *dev) {
+static void kscan_matrix_read_end(const struct device *dev, bool toggle_mode) {
 #if USE_INTERRUPTS
     // Return to waiting for an interrupt.
-    kscan_matrix_interrupt_enable(dev);
+    kscan_matrix_interrupt_enable(dev, toggle_mode);
 #else
     struct kscan_matrix_data *data = dev->data;
     const struct kscan_matrix_config *config = dev->config;
@@ -261,6 +269,7 @@ static int kscan_matrix_read(const struct device *dev) {
 
     // Process the new state.
     bool continue_scan = false;
+    bool any_pressed = false;
 
     for (int r = 0; r < config->rows; r++) {
         for (int c = 0; c < config->cols; c++) {
@@ -272,6 +281,14 @@ static int kscan_matrix_read(const struct device *dev) {
 
                 LOG_DBG("Sending event at %i,%i state %s", r, c, pressed ? "on" : "off");
                 data->callback(dev, r, c, pressed);
+                if (pressed) {
+                    any_pressed = true;
+
+                    if (config->toggle_mode) {
+                        // immediately reset to unpressed if we are in toggle mode
+                        data->callback(dev, r, c, !pressed);
+                    }
+                }
             }
 
             continue_scan = continue_scan || zmk_debounce_is_active(state);
@@ -281,10 +298,19 @@ static int kscan_matrix_read(const struct device *dev) {
     if (continue_scan) {
         // At least one key is pressed or the debouncer has not yet decided if
         // it is pressed. Poll quickly until everything is released.
-        kscan_matrix_read_continue(dev);
+        if (config->toggle_mode && any_pressed) {
+            // if we're in toggle mode & found any keys pressed, go back to
+            // waiting for an interrupt. assume that we are applying this matrix
+            // to inputs from a toggle switch where only 1 input at a time can
+            // be ACTIVE and we don't want to trigger repeated behaviors after
+            // the switch is moved.
+            kscan_matrix_read_end(dev, config->toggle_mode);
+        } else {
+            kscan_matrix_read_continue(dev);
+        }
     } else {
         // All keys are released. Return to normal.
-        kscan_matrix_read_end(dev);
+        kscan_matrix_read_end(dev, config->toggle_mode);
     }
 
     return 0;
@@ -528,6 +554,7 @@ static const struct kscan_driver_api kscan_matrix_api = {
         .debounce_scan_period_ms = DT_INST_PROP(n, debounce_scan_period_ms),                       \
         .poll_period_ms = DT_INST_PROP(n, poll_period_ms),                                         \
         .diode_direction = INST_DIODE_DIR(n),                                                      \
+        .toggle_mode = DT_INST_PROP(n, toggle_mode),                                               \
     };                                                                                             \
                                                                                                    \
     PM_DEVICE_DT_INST_DEFINE(n, kscan_matrix_pm_action);                                           \

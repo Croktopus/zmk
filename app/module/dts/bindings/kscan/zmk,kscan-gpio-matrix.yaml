@@ -41,3 +41,6 @@ properties:
     enum:
       - row2col
       - col2row
+  toggle-mode:
+    type: boolean
+    description: Enable toggle-switch mode.

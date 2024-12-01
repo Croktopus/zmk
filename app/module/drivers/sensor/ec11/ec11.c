@@ -125,6 +125,7 @@ int ec11_init(const struct device *dev) {
         return -EINVAL;
     }
 
+    // configure the pins on the MPC as input pins
     if (gpio_pin_configure_dt(&drv_cfg->a, GPIO_INPUT)) {
         LOG_DBG("Failed to configure A pin");
         return -EIO;
@@ -135,6 +136,14 @@ int ec11_init(const struct device *dev) {
         return -EIO;
     }
 
+    /*
+     * add interrupt callbacks on the interrupt pin for pins A and B. this
+     * callback (1) disables interrupt handling for both pins, (2) submits a
+     * task to the work queue that calls the handler and then re-enables the
+     * interrupt handling for both pins. the handler is a ZMK-internal func
+     * basically that checks what trigger got fired, then goes and calls fetch +
+     * get.
+     */
 #ifdef CONFIG_EC11_TRIGGER
     if (ec11_init_interrupt(dev) < 0) {
         LOG_DBG("Failed to initialize interrupt!");
